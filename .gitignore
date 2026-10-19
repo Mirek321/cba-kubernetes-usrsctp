@@ -1,0 +1,41 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Build artifacts
+build/
+dist/
+out/
+bin/
+lib/
+*.o
+*.a
+*.so
+*.dylib
+
+# Generated CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+
+# Logs and temporary files
+*.log
+*.tmp
+tmp/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Coverage and test output
+coverage/
+Testing/
+

@@ -1,0 +1,42 @@
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY usrsctp/ /build/usrsctp/
+COPY client/client.c /build/client.c
+
+WORKDIR /build/usrsctp
+
+RUN ./bootstrap && \
+    ./configure && \
+    make -j"$(nproc)"
+
+# Preloženie vlastného client.c
+RUN gcc -o /build/client /build/client.c \
+    -I/build/usrsctp/usrsctplib \
+    -L/build/usrsctp/usrsctplib/.libs \
+    -lusrsctp
+
+
+FROM ubuntu:24.04
+
+WORKDIR /app
+
+COPY --from=builder /build/client /app/client
+
+COPY --from=builder \
+    /build/usrsctp/usrsctplib/.libs/libusrsctp.so.2 \
+    /usr/local/lib/
+
+RUN ldconfig
+
+CMD ["./client"]
