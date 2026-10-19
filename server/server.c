@@ -10,60 +10,28 @@
 #include <usrsctp.h>
 
 #define SCTP_PORT 9999
+#define LOCAL_UDP_ENCAP_PORT 9899
+#define PEER_UDP_ENCAP_PORT 9898
 
-#define SERVER_IP1 "192.168.100.101"
-#define SERVER_IP2 "192.168.200.101"
+#define SERVER_IP "192.168.100.65"
 
 #define BUFFER_SIZE 1024
-
-
-static int
-receive_cb(struct socket *sock,
-           union sctp_sockstore addr,
-           void *data,
-           size_t datalen,
-           struct sctp_rcvinfo rcv,
-           int flags,
-           void *ulp_info)
-{
-    if (data == NULL) {
-        return 1;
-    }
-
-    if (flags & MSG_NOTIFICATION) {
-
-        printf("SCTP notification received\n");
-
-    } else {
-
-        printf("Received %zu bytes: %.*s\n",
-               datalen,
-               (int)datalen,
-               (char *)data);
-    }
-
-    free(data);
-
-    return 1;
-}
 
 
 int
 main(void)
 {
     struct socket *sock;
+    struct socket *connection;
 
-    struct sockaddr_in local_addresses[2];
+    struct sockaddr_in local_address;
+    struct sctp_udpencaps remote_encaps;
+    char buffer[BUFFER_SIZE + 1];
 
-    printf("Starting usrsctp server...\n");
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("Starting usrsctp server on %s:%d\n", SERVER_IP, SCTP_PORT);
 
-    /*
-     * Initialize usrsctp.
-     *
-     * 0 = no UDP encapsulation,
-     *     use native/direct SCTP.
-     */
-    usrsctp_init(0, NULL, NULL);
+    usrsctp_init(LOCAL_UDP_ENCAP_PORT, NULL, NULL);
 
 
     /*
@@ -73,7 +41,7 @@ main(void)
         AF_INET,
         SOCK_STREAM,
         IPPROTO_SCTP,
-        receive_cb,
+        NULL,
         NULL,
         0,
         NULL
@@ -84,70 +52,35 @@ main(void)
         return 1;
     }
 
-
-    /*
-     * -------------------------------------------------
-     * Local address #1
-     * 192.168.100.102
-     * -------------------------------------------------
-     */
-
-    memset(&local_addresses[0], 0,
-           sizeof(struct sockaddr_in));
-
-    local_addresses[0].sin_family = AF_INET;
-    local_addresses[0].sin_port = htons(SCTP_PORT);
-
-    if (inet_pton(
-            AF_INET,
-            SERVER_IP1,
-            &local_addresses[0].sin_addr) != 1) {
-
-        perror("inet_pton SERVER_IP1");
+    memset(&remote_encaps, 0, sizeof(remote_encaps));
+    remote_encaps.sue_address.ss_family = AF_INET;
+    remote_encaps.sue_port = htons(PEER_UDP_ENCAP_PORT);
+    if (usrsctp_setsockopt(sock, IPPROTO_SCTP,
+                           SCTP_REMOTE_UDP_ENCAPS_PORT,
+                           &remote_encaps, sizeof(remote_encaps)) < 0) {
+        perror("usrsctp_setsockopt SCTP_REMOTE_UDP_ENCAPS_PORT");
+        usrsctp_close(sock);
         return 1;
     }
 
 
-    /*
-     * -------------------------------------------------
-     * Local address #2
-     * 192.168.200.102
-     * -------------------------------------------------
-     */
-
-    memset(&local_addresses[1], 0,
-           sizeof(struct sockaddr_in));
-
-    local_addresses[1].sin_family = AF_INET;
-    local_addresses[1].sin_port = htons(SCTP_PORT);
-
-    if (inet_pton(
-            AF_INET,
-            SERVER_IP2,
-            &local_addresses[1].sin_addr) != 1) {
-
-        perror("inet_pton SERVER_IP2");
+    memset(&local_address, 0, sizeof(local_address));
+    local_address.sin_family = AF_INET;
+    local_address.sin_port = htons(SCTP_PORT);
+    if (inet_pton(AF_INET, SERVER_IP, &local_address.sin_addr) != 1) {
+        fprintf(stderr, "Invalid server IP address: %s\n", SERVER_IP);
+        usrsctp_close(sock);
         return 1;
     }
 
-
-    /*
-     * Add both local addresses to the SCTP endpoint.
-     */
-    if (usrsctp_bindx(
-            sock,
-            (struct sockaddr *)local_addresses,
-            2,
-            SCTP_BINDX_ADD_ADDR) < 0) {
-
-        perror("usrsctp_bindx");
+    if (usrsctp_bind(sock, (struct sockaddr *)&local_address,
+                     sizeof(local_address)) < 0) {
+        perror("usrsctp_bind");
+        usrsctp_close(sock);
         return 1;
     }
 
-
-    printf("Server bound to:\n");
-    printf("  %s:%d\n", SERVER_IP1, SCTP_PORT);
-    printf("  %s:%d\n", SERVER_IP2, SCTP_PORT);
+    printf("Server bound to %s:%d\n", SERVER_IP, SCTP_PORT);
 
 
     /*
@@ -160,19 +93,67 @@ main(void)
     }
 
 
-    printf("SCTP server listening...\n");
+    printf("SCTP server listening on %s:%d\n", SERVER_IP, SCTP_PORT);
 
 
-    /*
-     * Keep the server running.
-     *
-     * receive_cb() receives incoming data.
-     */
-    while (1) {
-        sleep(1);
+    /* Accept a connection, then receive synchronously without callbacks. */
+    connection = usrsctp_accept(sock, NULL, NULL);
+    if (connection == NULL) {
+        perror("usrsctp_accept");
+        usrsctp_close(sock);
+        return 1;
     }
 
+    for (;;) {
+        struct sockaddr_storage addr;
+        struct sockaddr_in *peer = (struct sockaddr_in *)&addr;
+        struct sctp_rcvinfo rcv_info;
+        char peer_ip[INET_ADDRSTRLEN];
+        socklen_t from_len = sizeof(addr);
+        socklen_t infolen = sizeof(rcv_info);
+        unsigned int infotype = SCTP_RECVV_RCVINFO;
+        int flags = 0;
+        ssize_t n;
 
+        n = usrsctp_recvv(connection, buffer, BUFFER_SIZE,
+                          (struct sockaddr *)&addr, &from_len,
+                          &rcv_info, &infolen, &infotype, &flags);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("usrsctp_recvv");
+            break;
+        }
+        if (n == 0) {
+            printf("SCTP connection closed\n");
+            break;
+        }
+        if (flags & MSG_NOTIFICATION) {
+            printf("SCTP notification received (%zd bytes)\n", n);
+            continue;
+        }
+
+        if (inet_ntop(AF_INET, &peer->sin_addr,
+                      peer_ip, sizeof(peer_ip)) != NULL) {
+            printf("Received %zd bytes from %s:%u on stream %u: %.*s\n",
+                   n, peer_ip, ntohs(peer->sin_port),
+                   infotype == SCTP_RECVV_RCVINFO ? rcv_info.rcv_sid : 0,
+                   (int)n, buffer);
+        } else {
+            printf("Received %zd bytes on stream %u: %.*s\n", n,
+                   infotype == SCTP_RECVV_RCVINFO ? rcv_info.rcv_sid : 0,
+                   (int)n, buffer);
+        }
+
+        if (usrsctp_sendv(connection, buffer, (size_t)n, NULL, 0,
+                          NULL, 0, SCTP_SENDV_NOINFO, 0) < 0) {
+            perror("usrsctp_sendv");
+            break;
+        }
+        printf("Echoed %zd bytes to client\n", n);
+    }
+
+    usrsctp_close(connection);
     usrsctp_close(sock);
 
     while (usrsctp_finish() != 0) {

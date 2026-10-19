@@ -10,11 +10,12 @@
 #include <usrsctp.h>
 
 #define SCTP_PORT 9999
+#define LOCAL_UDP_ENCAP_PORT 9898
+#define PEER_UDP_ENCAP_PORT 9899
 
-#define CLIENT_IP1 "192.168.100.102"
-#define CLIENT_IP2 "192.168.200.102"
+#define CLIENT_IP "192.168.100.65"
 
-#define SERVER_IP "192.168.100.101"
+#define SERVER_IP "192.168.100.65"
 
 
 static int
@@ -26,6 +27,11 @@ receive_cb(struct socket *sock,
            int flags,
            void *ulp_info)
 {
+    (void)sock;
+    (void)addr;
+    (void)rcv;
+    (void)ulp_info;
+
     if (data == NULL) {
         return 1;
     }
@@ -53,21 +59,23 @@ main(void)
 {
     struct socket *sock;
 
-    struct sockaddr_in local_addresses[2];
+    struct sockaddr_in local_address;
 
     struct sockaddr_in server_address;
+    struct sctp_udpencaps remote_encaps;
 
     const char *message =
         "Hello from usrsctp client!";
 
 
-    printf("Starting usrsctp client...\n");
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("Starting usrsctp client from %s\n", CLIENT_IP);
 
 
     /*
      * Initialize usrsctp.
      */
-    usrsctp_init(0, NULL, NULL);
+    usrsctp_init(LOCAL_UDP_ENCAP_PORT, NULL, NULL);
 
 
     /*
@@ -88,70 +96,35 @@ main(void)
         return 1;
     }
 
-
-    /*
-     * -------------------------------------------------
-     * Local address #1
-     * 192.168.100.103
-     * -------------------------------------------------
-     */
-
-    memset(&local_addresses[0], 0,
-           sizeof(struct sockaddr_in));
-
-    local_addresses[0].sin_family = AF_INET;
-    local_addresses[0].sin_port = htons(0);
-
-    if (inet_pton(
-            AF_INET,
-            CLIENT_IP1,
-            &local_addresses[0].sin_addr) != 1) {
-
-        perror("inet_pton CLIENT_IP1");
+    memset(&remote_encaps, 0, sizeof(remote_encaps));
+    remote_encaps.sue_address.ss_family = AF_INET;
+    remote_encaps.sue_port = htons(PEER_UDP_ENCAP_PORT);
+    if (usrsctp_setsockopt(sock, IPPROTO_SCTP,
+                           SCTP_REMOTE_UDP_ENCAPS_PORT,
+                           &remote_encaps, sizeof(remote_encaps)) < 0) {
+        perror("usrsctp_setsockopt SCTP_REMOTE_UDP_ENCAPS_PORT");
+        usrsctp_close(sock);
         return 1;
     }
 
 
-    /*
-     * -------------------------------------------------
-     * Local address #2
-     * 192.168.200.103
-     * -------------------------------------------------
-     */
-
-    memset(&local_addresses[1], 0,
-           sizeof(struct sockaddr_in));
-
-    local_addresses[1].sin_family = AF_INET;
-    local_addresses[1].sin_port = htons(0);
-
-    if (inet_pton(
-            AF_INET,
-            CLIENT_IP2,
-            &local_addresses[1].sin_addr) != 1) {
-
-        perror("inet_pton CLIENT_IP2");
+    memset(&local_address, 0, sizeof(local_address));
+    local_address.sin_family = AF_INET;
+    local_address.sin_port = htons(0);
+    if (inet_pton(AF_INET, CLIENT_IP, &local_address.sin_addr) != 1) {
+        fprintf(stderr, "Invalid client IP address: %s\n", CLIENT_IP);
+        usrsctp_close(sock);
         return 1;
     }
 
-
-    /*
-     * Add both local addresses.
-     */
-    if (usrsctp_bindx(
-            sock,
-            (struct sockaddr *)local_addresses,
-            2,
-            SCTP_BINDX_ADD_ADDR) < 0) {
-
-        perror("usrsctp_bindx");
+    if (usrsctp_bind(sock, (struct sockaddr *)&local_address,
+                     sizeof(local_address)) < 0) {
+        perror("usrsctp_bind");
+        usrsctp_close(sock);
         return 1;
     }
 
-
-    printf("Client bound to:\n");
-    printf("  %s\n", CLIENT_IP1);
-    printf("  %s\n", CLIENT_IP2);
+    printf("Client bound to %s\n", CLIENT_IP);
 
 
     /*

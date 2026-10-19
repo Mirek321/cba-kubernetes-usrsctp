@@ -22,19 +22,20 @@ RUN ./bootstrap && \
     ./configure && \
     make -j"$(nproc)"
 
-# Build client using CMake
-WORKDIR /build/client
-
-RUN cmake -S . -B build \
-        -DCMAKE_CXX_COMPILER=g++ \
-        -DCMAKE_PREFIX_PATH=/build/usrsctp && \
-    cmake --build build -j"$(nproc)"
+# Build the C client.
+RUN gcc -Wall -Wextra -std=c11 \
+        -I/build/usrsctp/usrsctplib \
+        /build/client/client.c \
+        -L/build/usrsctp/usrsctplib/.libs \
+        -Wl,-rpath,/usr/local/lib \
+        -lusrsctp \
+        -o /build/client-bin
 
 FROM ubuntu:24.04
 
 WORKDIR /app
 
-COPY --from=builder /build/client/build/client /app/client
+COPY --from=builder /build/client-bin /app/client
 
 COPY --from=builder \
     /build/usrsctp/usrsctplib/.libs/libusrsctp.so.2 \

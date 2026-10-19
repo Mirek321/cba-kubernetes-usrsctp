@@ -22,19 +22,20 @@ RUN ./bootstrap && \
     ./configure && \
     make -j"$(nproc)"
 
-# Build server using CMake
-WORKDIR /build/server
-
-RUN cmake -S . -B build \
-        -DCMAKE_CXX_COMPILER=g++ \
-        -DCMAKE_PREFIX_PATH=/build/usrsctp && \
-    cmake --build build -j"$(nproc)"
+# Build the callback-free C server.
+RUN gcc -Wall -Wextra -std=c11 \
+        -I/build/usrsctp/usrsctplib \
+        /build/server/server.c \
+        -L/build/usrsctp/usrsctplib/.libs \
+        -Wl,-rpath,/usr/local/lib \
+        -lusrsctp \
+        -o /build/server-bin
 
 FROM ubuntu:24.04
 
 WORKDIR /app
 
-COPY --from=builder /build/server/build/server /app/server
+COPY --from=builder /build/server-bin /app/server
 
 COPY --from=builder \
     /build/usrsctp/usrsctplib/.libs/libusrsctp.so.2 \
